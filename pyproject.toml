@@ -1,0 +1,79 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "demucs-mlx"
+dynamic = ["version"]
+description = "Music source separation with MLX acceleration."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+authors = [{name = "ssmall256", email = "ssmall256@users.noreply.github.com"}]
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Multimedia :: Sound/Audio",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "mlx>=0.31.0",
+  "mlx-audio-io>=1.3.9",
+  "mlx-spectro>=0.2.4",
+  "numpy",
+  "packaging",
+  "tqdm",
+  "lameenc",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build",
+  "pyright",
+  "ruff",
+]
+
+convert = [
+  "demucs>=4.0",
+  "torch",
+]
+
+[project.scripts]
+demucs-mlx = "demucs_mlx.separate:main"
+
+[project.urls]
+Homepage = "https://github.com/nicapotato/demucs-mac-silicon"
+
+[tool.pyright]
+pythonVersion = "3.10"
+typeCheckingMode = "basic"
+reportMissingImports = "warning"
+reportOptionalSubscript = false
+reportOptionalOperand = false
+reportOptionalMemberAccess = false
+reportOptionalIterable = false
+reportArgumentType = false
+reportAttributeAccessIssue = false
+reportIndexIssue = false
+reportCallIssue = false
+reportRedeclaration = false
+reportPrivateImportUsage = false
+reportOperatorIssue = false
+
+[tool.ruff]
+line-length = 100
+exclude = []
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.dynamic]
+version = {attr = "demucs_mlx.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["demucs_mlx*"]
+
+[tool.setuptools.package-data]
+demucs_mlx = ["remote/*.txt", "remote/*.yaml"]

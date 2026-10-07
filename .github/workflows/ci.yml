@@ -1,0 +1,124 @@
+name: ci
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version override (leave empty to use project.conf)"
+        required: false
+        default: ""
+        type: string
+      freeze_worker:
+        description: "Freeze PyInstaller worker and upload artifact"
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: ci-${{ github.sha }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  python:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Lint
+        run: uv run ruff check demucs_mlx tests
+
+      - name: Type check
+        run: uv run pyright
+
+      - name: Run kernel tests
+        run: uv run python tests/test_metal_kernels.py
+
+      - name: Run apply_model chunk/seed regression
+        run: uv run python tests/test_apply_model_chunk_seed.py
+
+      - name: Run optional mlx-weights integration regression
+        run: uv run python tests/test_model_converter_optional_mlx_weights.py
+
+      - name: Run apply_model overlap-add regression
+        run: uv run python tests/test_apply_model_overlap_add.py
+
+      - name: Test CLI
+        run: uv run demucs-mlx --list-models
+
+      - name: Test import
+        run: |
+          uv run python -c "
+          from demucs_mlx import Separator, save_audio, list_models
+          models = list_models()
+          print('Models:', models)
+          assert 'htdemucs' in models['single']
+          print('Import test passed')
+          "
+
+  freeze-worker:
+    runs-on: macos-latest
+    needs: python
+    if: github.event.inputs.freeze_worker == 'true'
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install convert + freeze deps
+        run: |
+          set -euo pipefail
+          uv venv .venv --python "${{ env.PYTHON_VERSION }}"
+          source .venv/bin/activate
+          uv pip install -e '.[convert]' lameenc pyinstaller
+
+      - name: Restore MLX model cache
+        uses: actions/cache@v4
+        id: model-cache
+        with:
+          path: models/htdemucs_6s_mlx.pkl
+          key: htdemucs-6s-mlx-${{ hashFiles('demucs_mlx/__init__.py', 'demucs_mlx/remote/htdemucs_6s.yaml') }}
+
+      - name: Convert / ensure MLX weights
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          source .venv/bin/activate
+          mkdir -p models
+          DEMUCS_MLX_CACHE="$(pwd)/models" python -c "from demucs_mlx.model_converter import get_mlx_model; get_mlx_model('htdemucs_6s'); print('ok')"
+          test -f models/htdemucs_6s_mlx.pkl
+
+      - name: Freeze worker
+        run: |
+          set -euo pipefail
+          source .venv/bin/activate
+          chmod +x scripts/freeze_worker.sh
+          DEMUCS_MLX_PYTHON="$(pwd)/.venv/bin/python" bash scripts/freeze_worker.sh
+          test -x dist/worker/demucs_mlx_worker/demucs_mlx_worker
+
+      - name: Upload worker artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: demucs-mlx-worker-mac-arm64
+          path: |
+            dist/worker/demucs_mlx_worker
+            models/htdemucs_6s_mlx.pkl
+          if-no-files-found: error
