@@ -1,0 +1,280 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version override (leave empty to use project.conf)"
+        required: false
+        default: ""
+        type: string
+      publish_gh_release:
+        description: "Create git tag + GitHub Release assets"
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  PYTHON_VERSION: "3.12"
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  read-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      models_tag: ${{ steps.v.outputs.models_tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_VERSION}" ]; then
+            V="${INPUT_VERSION}"
+          else
+            V=$(grep '^VERSION=' project.conf | cut -d= -f2 | tr -d '[:space:]')
+          fi
+          MODELS_TAG=$(grep '^MODELS_RELEASE_TAG=' project.conf | cut -d= -f2 | tr -d '[:space:]')
+          if [ -z "$V" ]; then
+            echo "ERROR: empty VERSION" >&2
+            exit 1
+          fi
+          if [ -z "$MODELS_TAG" ]; then
+            echo "ERROR: empty MODELS_RELEASE_TAG in project.conf" >&2
+            exit 1
+          fi
+          echo "version=${V}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${V}" >> "$GITHUB_OUTPUT"
+          echo "models_tag=${MODELS_TAG}" >> "$GITHUB_OUTPUT"
+          echo "Version: ${V} (tag v${V}); models ${MODELS_TAG}"
+
+  python:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Lint
+        run: uv run ruff check demucs_mlx tests
+
+      - name: Type check
+        run: uv run pyright
+
+      - name: Run kernel tests
+        run: uv run python tests/test_metal_kernels.py
+
+      - name: Run apply_model chunk/seed regression
+        run: uv run python tests/test_apply_model_chunk_seed.py
+
+      - name: Run optional mlx-weights integration regression
+        run: uv run python tests/test_model_converter_optional_mlx_weights.py
+
+      - name: Run apply_model overlap-add regression
+        run: uv run python tests/test_apply_model_overlap_add.py
+
+      - name: Test CLI
+        run: uv run demucs-mlx --list-models
+
+      - name: Test import
+        run: |
+          uv run python -c "
+          from demucs_mlx import Separator, save_audio, list_models
+          models = list_models()
+          print('Models:', models)
+          assert 'htdemucs' in models['single']
+          print('Import test passed')
+          "
+
+  freeze-worker:
+    runs-on: macos-latest
+    needs: [read-version, python]
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.read-version.outputs.version }}
+      MODELS_TAG: ${{ needs.read-version.outputs.models_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install convert + freeze deps
+        run: |
+          set -euo pipefail
+          uv venv .venv --python "${{ env.PYTHON_VERSION }}"
+          source .venv/bin/activate
+          uv pip install -e '.[convert]' lameenc pyinstaller
+
+      - name: Check pinned models GitHub Release
+        id: pin
+        run: |
+          set -euo pipefail
+          chmod +x scripts/fetch_mlx_weights.sh
+          if gh release view "${MODELS_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Using pinned ${MODELS_TAG}"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Pinned ${MODELS_TAG} not published yet; will convert"
+          fi
+
+      - name: Download pinned MLX weights
+        if: steps.pin.outputs.exists == 'true'
+        run: |
+          set -euo pipefail
+          DEMUCS_MLX_CACHE="$(pwd)/models" bash scripts/fetch_mlx_weights.sh
+          test -f models/htdemucs_6s_mlx.pkl
+
+      - name: Restore MLX model cache
+        if: steps.pin.outputs.exists != 'true'
+        uses: actions/cache@v4
+        id: model-cache
+        with:
+          path: models/htdemucs_6s_mlx.pkl
+          key: htdemucs-6s-mlx-${{ hashFiles('demucs_mlx/__init__.py', 'demucs_mlx/remote/htdemucs_6s.yaml') }}
+
+      - name: Convert / ensure MLX weights
+        if: steps.pin.outputs.exists != 'true' && steps.model-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          source .venv/bin/activate
+          mkdir -p models
+          DEMUCS_MLX_CACHE="$(pwd)/models" python -c "from demucs_mlx.model_converter import get_mlx_model; get_mlx_model('htdemucs_6s'); print('ok')"
+          test -f models/htdemucs_6s_mlx.pkl
+
+      - name: Freeze worker
+        run: |
+          set -euo pipefail
+          source .venv/bin/activate
+          chmod +x scripts/freeze_worker.sh
+          DEMUCS_MLX_PYTHON="$(pwd)/.venv/bin/python" bash scripts/freeze_worker.sh
+          test -x dist/worker/demucs_mlx_worker/demucs_mlx_worker
+          test -f models/htdemucs_6s_mlx.pkl
+
+      - name: Package release assets
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          ditto -c -k --keepParent dist/worker/demucs_mlx_worker \
+            "release-assets/demucs-mlx-worker-mac-arm64-v${VERSION}.zip"
+          cp models/htdemucs_6s_mlx.pkl release-assets/htdemucs_6s_mlx.pkl
+          (
+            cd release-assets
+            shasum -a 256 htdemucs_6s_mlx.pkl | tee htdemucs_6s_mlx.pkl.sha256
+            shasum -a 256 "demucs-mlx-worker-mac-arm64-v${VERSION}.zip" \
+              | tee "demucs-mlx-worker-mac-arm64-v${VERSION}.zip.sha256"
+          )
+          ls -la release-assets/
+          BYTES=$(stat -f%z "release-assets/htdemucs_6s_mlx.pkl")
+          test "$BYTES" -gt 1000000
+          test "$BYTES" -lt 2147483648
+
+      - name: Upload release assets artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: demucs-mlx-worker-mac-arm64-release
+          path: release-assets/*
+          if-no-files-found: error
+
+  publish-gh-release:
+    runs-on: ubuntu-latest
+    needs: [read-version, freeze-worker]
+    if: github.event.inputs.publish_gh_release == 'true'
+    env:
+      TAG: ${{ needs.read-version.outputs.tag }}
+      VERSION: ${{ needs.read-version.outputs.version }}
+      MODELS_TAG: ${{ needs.read-version.outputs.models_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Guard duplicate worker tag
+        run: |
+          set -euo pipefail
+          git fetch --tags origin
+          if git rev-parse "${TAG}" >/dev/null 2>&1; then
+            echo "ERROR: Tag ${TAG} already exists; bump VERSION in project.conf" >&2
+            exit 1
+          fi
+          echo "Tag ${TAG} is available"
+
+      - name: Download packaged assets
+        uses: actions/download-artifact@v4
+        with:
+          name: demucs-mlx-worker-mac-arm64-release
+          path: release-assets
+
+      - name: Create worker GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          target_commitish: ${{ github.sha }}
+          name: demucs-mac-silicon ${{ env.TAG }}
+          generate_release_notes: true
+          body: |
+            Frozen MLX worker for [demucs-ui-app](https://github.com/nicapotato/demucs-ui-app).
+
+            ## Assets
+            - `demucs-mlx-worker-mac-arm64-v${{ env.VERSION }}.zip` — PyInstaller onedir
+            - `htdemucs_6s_mlx.pkl` — converted MLX weights (~105 MB)
+
+            Weights are also pinned on immutable release `${{ env.MODELS_TAG }}`.
+            Bump `MODELS_RELEASE_TAG` in `project.conf` only when conversion inputs change.
+          files: |
+            release-assets/*
+
+      - name: Pin or verify immutable models release
+        run: |
+          set -euo pipefail
+          PKL="release-assets/htdemucs_6s_mlx.pkl"
+          HASH="release-assets/htdemucs_6s_mlx.pkl.sha256"
+          test -f "$PKL"
+          test -f "$HASH"
+          if gh release view "${MODELS_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            mkdir -p /tmp/pin
+            gh release download "${MODELS_TAG}" --repo "${GITHUB_REPOSITORY}" \
+              -p 'htdemucs_6s_mlx.pkl.sha256' -D /tmp/pin
+            if ! cmp -s "$HASH" /tmp/pin/htdemucs_6s_mlx.pkl.sha256; then
+              echo "ERROR: converted pickle sha256 does not match ${MODELS_TAG}." >&2
+              echo "Bump MODELS_RELEASE_TAG in project.conf to publish a new weights pin." >&2
+              echo "pinned:" >&2
+              cat /tmp/pin/htdemucs_6s_mlx.pkl.sha256 >&2
+              echo "this build:" >&2
+              cat "$HASH" >&2
+              exit 1
+            fi
+            echo "${MODELS_TAG} sha256 matches this build"
+          else
+            gh release create "${MODELS_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --target "${GITHUB_SHA}" \
+              --title "MLX weights ${MODELS_TAG}" \
+              --notes "Immutable converted htdemucs_6s MLX pickle. Do not overwrite. To ship new weights, bump MODELS_RELEASE_TAG in project.conf and cut another worker release." \
+              --latest=false \
+              "$PKL" "$HASH"
+            echo "Created ${MODELS_TAG}"
+          fi

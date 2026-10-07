@@ -58,8 +58,17 @@ make worker
 # → dist/worker/demucs_mlx_worker/demucs_mlx_worker
 ```
 
-CI (`make ci`) runs tests and uploads `demucs-mlx-worker-mac-arm64`. Product zips and
-itch.io shipping are in demucs-ui-app.
+CI (`make ci`) runs tests and uploads a 90-day Actions artifact. Permanent pins:
+
+```bash
+make release          # tag v$(VERSION) from project.conf
+make release-watch
+```
+
+That publishes `demucs-mlx-worker-mac-arm64-vX.Y.Z.zip` plus `htdemucs_6s_mlx.pkl` on a
+GitHub Release, and creates the immutable weights tag in `MODELS_RELEASE_TAG` the first
+time. Later CI downloads that tag instead of reconverting. Product zips / itch.io stay
+in demucs-ui-app.
 
 ## Python usage
 
@@ -83,6 +92,22 @@ for name, audio in stems.items():
 | `hdemucs_mmi` | 4 | Hybrid Demucs MMI |
 | `mdx` | 4 | Music Demixing model |
 | `mdx_extra` | 4 | MDX with extra training |
+
+The frozen worker / GUI bundle **htdemucs_6s**. Converted MLX weights are a ~105 MB
+pickle (`htdemucs_6s_mlx.pkl`). They are **not** stored in git.
+
+**Distribution:** GitHub Release, not Actions artifacts (those expire) and not git-lfs.
+
+- First `make release` converts from official PyTorch Demucs, then publishes pickle +
+  sha256 on immutable tag `MODELS_RELEASE_TAG` (currently `models-htdemucs-6s-mlx-1`).
+- That tag is never overwritten. If conversion inputs change, bump `MODELS_RELEASE_TAG`
+  in `project.conf` and cut another release.
+- Fetch a pin: `make models-fetch` (needs `gh`). Bootstrap without a pin:
+  `uv sync --extra convert && make models-convert`.
+
+Official PyTorch checkpoints already live on Meta's Demucs hosts; this repo only stores
+the **derived MLX pickle**. Hugging Face Hub is a fine public CDN if you want a model
+card later — it is not required for pinning.
 
 ## Documentation
 

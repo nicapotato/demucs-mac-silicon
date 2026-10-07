@@ -18,8 +18,12 @@ concurrency:
   group: ci-${{ github.sha }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
   PYTHON_VERSION: "3.12"
+  GH_TOKEN: ${{ github.token }}
 
 jobs:
   python:
@@ -90,7 +94,29 @@ jobs:
           source .venv/bin/activate
           uv pip install -e '.[convert]' lameenc pyinstaller
 
+      - name: Check pinned models GitHub Release
+        id: pin
+        run: |
+          set -euo pipefail
+          chmod +x scripts/fetch_mlx_weights.sh
+          TAG=$(grep '^MODELS_RELEASE_TAG=' project.conf | cut -d= -f2 | tr -d '[:space:]')
+          test -n "$TAG"
+          if gh release view "$TAG" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Pinned $TAG not published yet; will convert"
+          fi
+
+      - name: Download pinned MLX weights
+        if: steps.pin.outputs.exists == 'true'
+        run: |
+          set -euo pipefail
+          DEMUCS_MLX_CACHE="$(pwd)/models" bash scripts/fetch_mlx_weights.sh
+          test -f models/htdemucs_6s_mlx.pkl
+
       - name: Restore MLX model cache
+        if: steps.pin.outputs.exists != 'true'
         uses: actions/cache@v4
         id: model-cache
         with:
@@ -98,7 +124,7 @@ jobs:
           key: htdemucs-6s-mlx-${{ hashFiles('demucs_mlx/__init__.py', 'demucs_mlx/remote/htdemucs_6s.yaml') }}
 
       - name: Convert / ensure MLX weights
-        if: steps.model-cache.outputs.cache-hit != 'true'
+        if: steps.pin.outputs.exists != 'true' && steps.model-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           source .venv/bin/activate

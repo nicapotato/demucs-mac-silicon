@@ -3,6 +3,7 @@ __pycache__/
 *.egg-info/
 dist/
 models/*.pkl
+models/*.sha256
 .DS_Store
 *.pyc
 .pytest_cache/

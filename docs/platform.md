@@ -33,6 +33,9 @@ Env vars:
 | `DEMUCS_MLX_CACHE` | Directory with `htdemucs_6s_mlx.pkl` |
 | `DEMUCS_MLX_WORKER_DIST` | Override freeze output dir (default `dist/worker`) |
 
+Pinned converted weights live on GitHub Release `MODELS_RELEASE_TAG` in `project.conf`.
+`make models-fetch` downloads them; `make models-convert` rebuilds from PyTorch.
+
 ## Linux
 
 - Python >= 3.10 required.
