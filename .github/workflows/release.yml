@@ -243,7 +243,6 @@ jobs:
             - `htdemucs_6s_mlx.pkl` — converted MLX weights (~105 MB)
 
             Weights are also pinned on immutable release `${{ env.MODELS_TAG }}`.
-            Bump `MODELS_RELEASE_TAG` in `project.conf` only when conversion inputs change.
           files: |
             release-assets/*
 
