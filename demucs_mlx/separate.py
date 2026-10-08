@@ -222,6 +222,7 @@ def _separate_one(
     writer: _AsyncWriter,
     fmt: str,
     track_name: tp.Optional[str],
+    compile_fwd: bool = False,
 ) -> Path:
     import mlx.core as mx
 
@@ -257,6 +258,7 @@ def _separate_one(
         batch_size=batch_size,
         progress=verbose and not _PROGRESS_JSON,
         progress_callback=_on_progress if _PROGRESS_JSON else None,
+        compile_fwd=compile_fwd,
     )
     mx.eval(estimates)
 
@@ -320,6 +322,11 @@ def main(argv: tp.Optional[tp.Sequence[str]] = None) -> int:
         "--progress-json",
         action="store_true",
         help="Emit line-delimited JSON progress events on stdout",
+    )
+    parser.add_argument(
+        "--compile",
+        action="store_true",
+        help="Wrap the HTDemucs segment forward in mx.compile",
     )
 
     args = parser.parse_args(argv)
@@ -403,6 +410,7 @@ def main(argv: tp.Optional[tp.Sequence[str]] = None) -> int:
                     writer=writer,
                     fmt=fmt,
                     track_name=args.track_name,
+                    compile_fwd=bool(args.compile),
                 )
                 _emit(
                     "done",

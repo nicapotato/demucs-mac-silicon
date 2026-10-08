@@ -79,6 +79,7 @@ def apply_model(
     seed: tp.Optional[int] = None,
     _rng: tp.Optional[random.Random] = None,
     progress_callback: tp.Optional[tp.Callable[[int, int], None]] = None,
+    compile_fwd: bool = False,
 ):
     progress_enabled = bool(progress) or progress_callback is not None
     if num_workers > 0:
@@ -102,7 +103,7 @@ def apply_model(
             res = apply_model(
                 sub_model, mix, shifts, split, overlap, transition_power,
                 progress, num_workers, segment, batch_size, seed=seed, _rng=rng,
-                progress_callback=progress_callback,
+                progress_callback=progress_callback, compile_fwd=compile_fwd,
             )
             out = mx.array(res)
 
@@ -135,6 +136,18 @@ def apply_model(
     mix_chunk = tensor_chunk(mix)
     batch, channels, length = mix_chunk.shape
     mix_dtype = mix_chunk.tensor.dtype
+    fwd = model
+    if compile_fwd:
+        compiled = getattr(model, "_dc_compiled_fwd", None)
+        if compiled is None:
+            inner = model
+
+            def _compiled_fwd(x, _inner=inner):
+                return _inner(x)
+
+            compiled = mx.compile(_compiled_fwd)
+            model._dc_compiled_fwd = compiled
+        fwd = compiled
 
     if shifts:
         max_shift = int(0.5 * model.samplerate)
@@ -149,6 +162,7 @@ def apply_model(
                 False, num_workers, segment, batch_size, seed=seed, _rng=rng,
                 # Only the first shift reports progress (avoids N× bar when shifts>1).
                 progress_callback=progress_callback if _ == 0 else None,
+                compile_fwd=compile_fwd,
             )
             out = out + shifted_out[..., max_shift - offset:]
         out = out / shifts
@@ -213,7 +227,7 @@ def apply_model(
             batch_tensor_flat = batch_tensor.reshape(b_seg * b_audio, channels, length)
 
             # 3. Run Model (Standard 3D Input)
-            batch_out_flat = model(batch_tensor_flat)
+            batch_out_flat = fwd(batch_tensor_flat)
 
             # 4. Unflatten: (Batch_Segments, Audio_Batch, Sources, Channels, Time)
             _, sources, out_c, out_t = batch_out_flat.shape
@@ -271,7 +285,7 @@ def apply_model(
                     padded = chunk.padded(valid_len)
 
                     # FIX: Pass 'padded' directly. It is already (Batch, Channels, Time).
-                    chunk_out = model(padded)
+                    chunk_out = fwd(padded)
                     chunk_out = center_trim(chunk_out, this_chunk_len)
 
                     end = offset + this_chunk_len
@@ -301,5 +315,5 @@ def apply_model(
     # No split path
     valid_length = model.valid_length(length) if hasattr(model, "valid_length") else length
     padded_mix = mix_chunk.padded(valid_length)
-    out = model(padded_mix)
+    out = fwd(padded_mix)
     return center_trim(out, length)
