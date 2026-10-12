@@ -5,7 +5,13 @@ import math
 
 import numpy as np
 
-from demucs_mlx.c_export import flatten_params, read_wav_float, save_safetensors, si_sdr, write_wav_pcm16
+from demucs_mlx.c_export import (
+    flatten_params,
+    read_wav_float,
+    save_safetensors,
+    si_sdr,
+    write_wav_pcm16,
+)
 
 
 def test_flatten_params_nested():

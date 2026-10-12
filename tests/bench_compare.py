@@ -264,7 +264,8 @@ def main(argv: list[str] | None = None) -> int:
             c_walls: list[float] = []
             c_out = out_root / f"c_{int(dur)}s"
             for i in range(args.warmup + args.iters):
-                run_out = c_out if i == args.warmup + args.iters - 1 else out_root / f"tmp_c_{int(dur)}s"
+                is_last = i == args.warmup + args.iters - 1
+                run_out = c_out if is_last else out_root / f"tmp_c_{int(dur)}s"
                 if run_out.exists():
                     shutil.rmtree(run_out)
                 t0 = time.perf_counter()

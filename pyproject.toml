@@ -45,6 +45,8 @@ demucs-mlx = "demucs_mlx.separate:main"
 Homepage = "https://github.com/nicapotato/demucs-mac-silicon"
 
 [tool.pyright]
+include = ["demucs_mlx", "tests", "scripts"]
+exclude = ["**/__pycache__", "**/.venv", "dist", "worker-c/build", "out", "models", "goldens"]
 pythonVersion = "3.10"
 typeCheckingMode = "basic"
 reportMissingImports = "warning"
