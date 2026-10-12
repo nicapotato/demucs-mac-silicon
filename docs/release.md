@@ -12,7 +12,8 @@ worker-py, then publishes on tag `v$VERSION`:
 |---|---|
 | `demucs-mlx-worker-py-mac-arm64-vX.Y.Z.zip` | frozen worker_py (PyInstaller onedir) |
 | `demucs-mlx-worker-c-mac-arm64-vX.Y.Z.zip` | worker-c binary + `mlx.metallib` |
-| `htdemucs_6s.safetensors`, `htdemucs_6s_config.json` | upstream-format weights for offline bundles (`DEMUCS_MLX_CACHE_DIR` layout) |
+| `htdemucs_6s.safetensors`, `htdemucs_6s_config.json` | upstream-format weights for the Python worker / offline bundles (`DEMUCS_MLX_CACHE_DIR` layout) |
+| `htdemucs_6s.c.safetensors`, `htdemucs_6s.json` | C-worker export (same tensors, no `model_0.` prefix). Rename the safetensors to `htdemucs_6s.safetensors` next to the json. Not stored in git (~105 MB). |
 | `export_manifest.json` | pinned demucs-mlx version, hashes, mlx / mlx-c pairing |
 | `SHA256SUMS` | checksums |
 

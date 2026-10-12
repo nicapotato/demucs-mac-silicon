@@ -87,7 +87,8 @@ make release-watch
 ```
 
 Runs the same gate, then tags `v$VERSION` and publishes the frozen worker-py zip, the
-worker-c zip, upstream-format weights (`htdemucs_6s.safetensors` + config) and
+worker-c zip, upstream-format weights (`htdemucs_6s.safetensors` + `_config.json`),
+the C-worker export (`htdemucs_6s.c.safetensors` + `htdemucs_6s.json`), and
 `export_manifest.json` (pinned upstream version and hashes) on a GitHub Release.
 
 ## Documentation

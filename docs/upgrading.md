@@ -108,7 +108,8 @@ The C worker reads a different export of the same tensors (`models/htdemucs_6s.s
 no `model_0.` key prefix, plus `htdemucs_6s.json`). Both use the filename
 `htdemucs_6s.safetensors`, so they must live in different directories. `worker_py` guards
 this: if `DEMUCS_MLX_CACHE` points at a directory holding a C export, it uses a `mlx/`
-subdirectory instead of overwriting it.
+subdirectory instead of overwriting it. Releases publish the C export as
+`htdemucs_6s.c.safetensors` plus `htdemucs_6s.json` so the two files do not collide.
 
 ## Upstreaming
 

@@ -4,6 +4,7 @@ name: release
 #   - demucs-mlx-worker-py-mac-arm64-vX.Y.Z.zip   frozen worker_py (PyInstaller onedir)
 #   - demucs-mlx-worker-c-mac-arm64-vX.Y.Z.zip    C worker + mlx.metallib
 #   - htdemucs_6s.safetensors + htdemucs_6s_config.json   upstream-format weights (offline bundle)
+#   - htdemucs_6s.c.safetensors + htdemucs_6s.json        C-worker export (same tensors, no model_0. prefix)
 #   - export_manifest.json                        pinned upstream version, hashes, mlx/mlx-c pairing
 # The gate (`make verify`, via ci.yml) must pass first.
 
@@ -108,10 +109,15 @@ jobs:
           set -euo pipefail
           make models-check models-export
           test -f models/mlx-cache/htdemucs_6s.safetensors
-          # Weights must be exactly what the manifest (and the parity gate) validated.
+          test -f models/htdemucs_6s.safetensors
+          test -f models/htdemucs_6s.json
+          # Upstream cache and C-export must match the committed manifest (parity gate).
           WANT=$(python3 -c "import json;print(json.load(open('models/export_manifest.json'))['source_cache_sha256'])")
           GOT=$(shasum -a 256 models/mlx-cache/htdemucs_6s.safetensors | cut -d' ' -f1)
-          test "$WANT" = "$GOT" || { echo "weights sha256 ${GOT} != manifest ${WANT}" >&2; exit 1; }
+          test "$WANT" = "$GOT" || { echo "upstream weights sha256 ${GOT} != manifest ${WANT}" >&2; exit 1; }
+          WANT=$(python3 -c "import json;print(json.load(open('models/export_manifest.json'))['export']['safetensors_sha256'])")
+          GOT=$(shasum -a 256 models/htdemucs_6s.safetensors | cut -d' ' -f1)
+          test "$WANT" = "$GOT" || { echo "C-export sha256 ${GOT} != manifest ${WANT}" >&2; exit 1; }
 
       - name: Build the C worker and the frozen worker_py
         run: |
@@ -132,15 +138,21 @@ jobs:
             "release-assets/demucs-mlx-worker-c-mac-arm64-v${VERSION}.zip"
           cp models/mlx-cache/htdemucs_6s.safetensors release-assets/
           cp models/mlx-cache/htdemucs_6s_config.json release-assets/
+          # Distinct name: same stem as the upstream file, different tensor keys.
+          cp models/htdemucs_6s.safetensors release-assets/htdemucs_6s.c.safetensors
+          cp models/htdemucs_6s.json release-assets/
           cp models/export_manifest.json release-assets/
           (
             cd release-assets
             shasum -a 256 * | tee SHA256SUMS
           )
           ls -la release-assets/
-          BYTES=$(stat -f%z release-assets/htdemucs_6s.safetensors)
-          test "$BYTES" -gt 1000000
-          test "$BYTES" -lt 2147483648
+          for f in htdemucs_6s.safetensors htdemucs_6s.c.safetensors; do
+            BYTES=$(stat -f%z "release-assets/${f}")
+            test "$BYTES" -gt 1000000
+            test "$BYTES" -lt 2147483648
+          done
+          test -f release-assets/htdemucs_6s.json
 
       - name: Upload release assets artifact
         uses: actions/upload-artifact@v4
@@ -205,7 +217,10 @@ jobs:
           print("- `demucs-mlx-worker-py-mac-arm64-*.zip`: frozen worker_py (PyInstaller onedir)")
           print("- `demucs-mlx-worker-c-mac-arm64-*.zip`: C worker + mlx.metallib")
           print("- `htdemucs_6s.safetensors`, `htdemucs_6s_config.json`: upstream-format weights "
-                "(DEMUCS_MLX_CACHE_DIR layout, for offline bundles)")
+                "(DEMUCS_MLX_CACHE_DIR layout, for the Python worker / offline bundles)")
+          print("- `htdemucs_6s.c.safetensors`, `htdemucs_6s.json`: C-worker export "
+                "(same tensors, no `model_0.` prefix; rename the safetensors to "
+                "`htdemucs_6s.safetensors` next to the json)")
           print("- `export_manifest.json`, `SHA256SUMS`")
           PY
 
