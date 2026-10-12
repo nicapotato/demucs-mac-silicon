@@ -11,7 +11,9 @@
 #include "mlx/c/mlx.h"
 
 #define DC_MAX_DIM 8
-#define DC_MAX_SOURCES 8
+/* The C worker only runs htdemucs_6s; any other checkpoint is rejected at load. */
+#define DC_MODEL_NAME "htdemucs_6s"
+#define DC_MAX_SOURCES 6
 
 #define DC_CHECK(expr)                                                         \
   do {                                                                         \

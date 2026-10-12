@@ -8,6 +8,7 @@ GH_R := $(if $(REPO),-R "$(REPO)",)
 REF ?= $(shell git branch --show-current 2>/dev/null)
 PYTHON := $(CURDIR)/.venv/bin/python
 PUBLISH_GH_RELEASE ?= true
+JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 
 .PHONY: test lint worker models-fetch models-convert models-export goldens bench worker-c worker-c-test clean ci ci-watch release release-watch
 
@@ -53,7 +54,7 @@ bench:
 
 worker-c:
 	cmake -S worker-c -B worker-c/build -DCMAKE_BUILD_TYPE=Release
-	cmake --build worker-c/build -j
+	cmake --build worker-c/build -j $(JOBS)
 	test -x worker-c/build/demucs_mlx_worker
 
 worker-c-test: worker-c

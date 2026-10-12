@@ -102,7 +102,7 @@ int main(int argc, char **argv) {
 
   const char *out_dir = "separated";
   const char *track_name = NULL;
-  const char *model_name = "htdemucs_6s";
+  const char *model_name = DC_MODEL_NAME;
   const char *weights = NULL;
   const char *config = NULL;
   float overlap = 0.25f;
@@ -125,7 +125,9 @@ int main(int argc, char **argv) {
       track_name = argv[++i];
     } else if ((strcmp(argv[i], "-n") == 0 || strcmp(argv[i], "--name") == 0) &&
                i + 1 < argc) {
-      model_name = argv[++i];
+      if (strcmp(argv[++i], DC_MODEL_NAME) != 0) {
+        dc_die("only %s is supported (got -n %s)", DC_MODEL_NAME, argv[i]);
+      }
     } else if (strcmp(argv[i], "--weights") == 0 && i + 1 < argc) {
       weights = argv[++i];
     } else if (strcmp(argv[i], "--config") == 0 && i + 1 < argc) {
@@ -148,7 +150,7 @@ int main(int argc, char **argv) {
     } else if (strcmp(argv[i], "--compile") == 0) {
       compile_fwd = 1;
     } else if (strcmp(argv[i], "--list-models") == 0) {
-      printf("htdemucs_6s\n");
+      printf("%s\n", DC_MODEL_NAME);
       return 0;
     } else if (strcmp(argv[i], "--prefetch-tracks") == 0 && i + 1 < argc) {
       ++i; /* GUI always passes this; C worker has no prefetch. */
@@ -168,7 +170,7 @@ int main(int argc, char **argv) {
   if (ntracks == 0) {
     fprintf(stderr,
             "usage: demucs_mlx_worker [flags] track.wav\n"
-            "  -n MODEL  --weights FILE.safetensors --config FILE.json\n"
+            "  -n " DC_MODEL_NAME " (only model)  --weights FILE.safetensors --config FILE.json\n"
             "  -o DIR --track-name NAME --overlap F --shifts N --seed N\n"
             "  -b N --no-split --progress-json --compile --mp3 --mp3-bitrate N\n"
             "  --prefetch-tracks N is accepted and ignored (GUI compatibility)\n");

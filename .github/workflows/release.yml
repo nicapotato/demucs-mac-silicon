@@ -28,11 +28,19 @@ env:
 jobs:
   read-version:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     outputs:
       version: ${{ steps.v.outputs.version }}
       tag: ${{ steps.v.outputs.tag }}
       models_tag: ${{ steps.v.outputs.models_tag }}
     steps:
+      - name: Block re-runs
+        if: github.run_attempt != 1
+        shell: bash
+        run: |
+          echo "::error::Re-runs are disabled (attempt ${{ github.run_attempt }}). Dispatch a new run instead." >&2
+          exit 1
+
       - uses: actions/checkout@v4
       - id: v
         env:
@@ -60,7 +68,15 @@ jobs:
 
   python:
     runs-on: macos-latest
+    timeout-minutes: 40
     steps:
+      - name: Block re-runs
+        if: github.run_attempt != 1
+        shell: bash
+        run: |
+          echo "::error::Re-runs are disabled (attempt ${{ github.run_attempt }}). Dispatch a new run instead." >&2
+          exit 1
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
@@ -106,12 +122,19 @@ jobs:
 
   freeze-worker:
     runs-on: macos-latest
+    timeout-minutes: 40
     needs: [read-version, python]
-    timeout-minutes: 60
     env:
       VERSION: ${{ needs.read-version.outputs.version }}
       MODELS_TAG: ${{ needs.read-version.outputs.models_tag }}
     steps:
+      - name: Block re-runs
+        if: github.run_attempt != 1
+        shell: bash
+        run: |
+          echo "::error::Re-runs are disabled (attempt ${{ github.run_attempt }}). Dispatch a new run instead." >&2
+          exit 1
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
@@ -201,6 +224,7 @@ jobs:
 
   publish-gh-release:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     needs: [read-version, freeze-worker]
     if: github.event.inputs.publish_gh_release == 'true'
     env:
@@ -208,6 +232,13 @@ jobs:
       VERSION: ${{ needs.read-version.outputs.version }}
       MODELS_TAG: ${{ needs.read-version.outputs.models_tag }}
     steps:
+      - name: Block re-runs
+        if: github.run_attempt != 1
+        shell: bash
+        run: |
+          echo "::error::Re-runs are disabled (attempt ${{ github.run_attempt }}). Dispatch a new run instead." >&2
+          exit 1
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0

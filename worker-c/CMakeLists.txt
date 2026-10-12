@@ -52,16 +52,24 @@ set(_dmx_lib_suffixes "${CMAKE_FIND_LIBRARY_SUFFIXES}")
 set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
 find_library(LAME_LIBRARY NAMES mp3lame
   PATHS /opt/homebrew/opt/lame/lib /opt/homebrew/lib /usr/local/lib)
+# lame >= 4.0 decodes via libmpg123; its static lib leaves mpg123_* undefined.
+find_library(MPG123_LIBRARY NAMES mpg123
+  PATHS /opt/homebrew/opt/mpg123/lib /opt/homebrew/lib /usr/local/lib)
 set(CMAKE_FIND_LIBRARY_SUFFIXES "${_dmx_lib_suffixes}")
 unset(_dmx_lib_suffixes)
 if(NOT LAME_INCLUDE_DIR OR NOT LAME_LIBRARY)
   message(FATAL_ERROR "libmp3lame not found (brew install lame)")
 endif()
 message(STATUS "libmp3lame: ${LAME_LIBRARY}")
+set(LAME_LINK_LIBS "${LAME_LIBRARY}")
+if(MPG123_LIBRARY)
+  message(STATUS "libmpg123: ${MPG123_LIBRARY}")
+  list(APPEND LAME_LINK_LIBS "${MPG123_LIBRARY}")
+endif()
 
 add_library(demucs_c_core STATIC ${WORKER_SRC})
 target_include_directories(demucs_c_core PUBLIC src "${LAME_INCLUDE_DIR}")
-target_link_libraries(demucs_c_core PUBLIC mlxc mlx "${LAME_LIBRARY}")
+target_link_libraries(demucs_c_core PUBLIC mlxc mlx ${LAME_LINK_LIBS})
 set_target_properties(demucs_c_core PROPERTIES LINKER_LANGUAGE CXX)
 
 add_executable(demucs_mlx_worker src/main.c)

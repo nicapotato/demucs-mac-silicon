@@ -28,7 +28,15 @@ env:
 jobs:
   python:
     runs-on: macos-latest
+    timeout-minutes: 40
     steps:
+      - name: Block re-runs
+        if: github.run_attempt != 1
+        shell: bash
+        run: |
+          echo "::error::Re-runs are disabled (attempt ${{ github.run_attempt }}). Dispatch a new run instead." >&2
+          exit 1
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
@@ -74,10 +82,17 @@ jobs:
 
   freeze-worker:
     runs-on: macos-latest
+    timeout-minutes: 40
     needs: python
     if: github.event.inputs.freeze_worker == 'true'
-    timeout-minutes: 60
     steps:
+      - name: Block re-runs
+        if: github.run_attempt != 1
+        shell: bash
+        run: |
+          echo "::error::Re-runs are disabled (attempt ${{ github.run_attempt }}). Dispatch a new run instead." >&2
+          exit 1
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5

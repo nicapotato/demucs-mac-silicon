@@ -118,6 +118,9 @@ static int parse_string_array(const char *json, const char *key, char out[][32],
   return n;
 }
 
+static const char *const k_sources_6s[DC_MAX_SOURCES] = {"drums", "bass",   "other",
+                                                          "vocals", "guitar", "piano"};
+
 static const char *kwargs_blob(const char *json) {
   const char *p = find_key(json, "kwargs");
   return p;
@@ -125,11 +128,10 @@ static const char *kwargs_blob(const char *json) {
 
 void dc_config_defaults(DcConfig *c) {
   memset(c, 0, sizeof(*c));
-  snprintf(c->model, sizeof(c->model), "htdemucs_6s");
-  const char *src[] = {"drums", "bass", "other", "vocals", "guitar", "piano"};
-  c->n_sources = 6;
-  for (int i = 0; i < 6; i++) {
-    snprintf(c->sources[i], sizeof(c->sources[i]), "%s", src[i]);
+  snprintf(c->model, sizeof(c->model), "%s", DC_MODEL_NAME);
+  c->n_sources = DC_MAX_SOURCES;
+  for (int i = 0; i < DC_MAX_SOURCES; i++) {
+    snprintf(c->sources[i], sizeof(c->sources[i]), "%s", k_sources_6s[i]);
   }
   c->samplerate = 44100;
   c->segment = 7.8f;
@@ -178,9 +180,20 @@ void dc_config_load_json(DcConfig *c, const char *path) {
   dc_config_defaults(c);
   char *json = load_file(path, NULL);
   parse_string_key(json, "model", c->model, sizeof(c->model), c->model);
-  int ns = parse_string_array(json, "sources", c->sources, DC_MAX_SOURCES);
+  if (strcmp(c->model, DC_MODEL_NAME) != 0) {
+    dc_die("C worker only supports %s (config %s is %s)", DC_MODEL_NAME, path, c->model);
+  }
+  char json_sources[DC_MAX_SOURCES + 1][32];
+  int ns = parse_string_array(json, "sources", json_sources, DC_MAX_SOURCES + 1);
   if (ns > 0) {
-    c->n_sources = ns;
+    if (ns != DC_MAX_SOURCES) {
+      dc_die("C worker expects %d sources, config %s has %d", DC_MAX_SOURCES, path, ns);
+    }
+    for (int i = 0; i < DC_MAX_SOURCES; i++) {
+      if (strcmp(json_sources[i], k_sources_6s[i]) != 0) {
+        dc_die("config %s source %d is %s, expected %s", path, i, json_sources[i], k_sources_6s[i]);
+      }
+    }
   }
   c->samplerate = parse_int_key(json, "samplerate", c->samplerate);
   c->segment = parse_float_key(json, "segment", c->segment);
@@ -276,9 +289,6 @@ void dc_config_load_json(DcConfig *c, const char *path) {
   }
   if (c->wiener_iters != 0) {
     dc_die("C worker requires wiener_iters=0 (got %d)", c->wiener_iters);
-  }
-  if (c->n_sources <= 0 || c->n_sources > DC_MAX_SOURCES) {
-    dc_die("bad n_sources %d", c->n_sources);
   }
   free(json);
 }

@@ -18,7 +18,8 @@ def main(argv: list[str] | None = None) -> int:
         "-n",
         "--name",
         default="htdemucs_6s",
-        help="Model name (default: htdemucs_6s)",
+        choices=["htdemucs_6s"],
+        help="Model name; the C worker only supports htdemucs_6s",
     )
     parser.add_argument(
         "-o",
