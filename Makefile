@@ -1,4 +1,9 @@
-# MLX worker — tests, freeze, CI / release dispatch.
+# demucs-mac-silicon: worker_py (wrapper over pinned demucs-mlx) + worker-c (mlx-c).
+#
+#   make verify         everything that must pass before bumping upstream / releasing
+#   make upgrade-check  after editing the demucs-mlx pin: lock, sync, verify
+#
+# See docs/upgrading.md.
 
 CI_WORKFLOW := .github/workflows/ci.yml
 RELEASE_WORKFLOW := .github/workflows/release.yml
@@ -10,47 +15,56 @@ PYTHON := $(CURDIR)/.venv/bin/python
 PUBLISH_GH_RELEASE ?= true
 JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 
-.PHONY: test lint worker models-fetch models-convert models-export goldens bench worker-c worker-c-test clean ci ci-watch release release-watch
+# Upstream weights cache (safetensors, digest-checked by demucs-mlx). Kept apart from the
+# C worker export in models/ because both use <model>.safetensors with different keys.
+MLX_CACHE := $(CURDIR)/models/mlx-cache
+export DEMUCS_MLX_CACHE_DIR := $(MLX_CACHE)
+
+.PHONY: lint test test-fast sync verify upgrade-check models-fetch models-export models-check models-check-upgrade \
+	goldens bench worker worker-py worker-pyinstaller worker-py-verify-build worker-c \
+	worker-c-test clean ci ci-watch release release-watch
+
+sync:
+	uv sync --extra dev --extra freeze
 
 lint:
-	uv run ruff check demucs_mlx tests
+	uv run ruff check worker_py tests scripts
 	uv run pyright
 
+# Everything that needs no weights, binaries or network.
+test-fast: lint
+	uv run pytest tests -q -m "not model"
+
+# Full suite. Model / C-worker / frozen-worker tests skip when their artifact is missing;
+# `make verify` builds them all first so nothing skips.
 test: lint
-	uv run python tests/test_metal_kernels.py
-	uv run python tests/test_apply_model_chunk_seed.py
-	uv run python tests/test_model_converter_optional_mlx_weights.py
-	uv run python tests/test_apply_model_overlap_add.py
-	uv run python tests/test_c_export.py
-	uv run demucs-mlx --list-models
-
-worker: worker-c
-	mkdir -p dist/worker
-	cp worker-c/build/demucs_mlx_worker dist/worker/demucs_mlx_worker
-	cp worker-c/build/_deps/mlx-build/mlx/backend/metal/kernels/mlx.metallib dist/worker/mlx.metallib
-	test -x dist/worker/demucs_mlx_worker
-
-worker-pyinstaller:
-	DEMUCS_MLX_PYTHON="$(PYTHON)" bash scripts/freeze_worker.sh
+	uv run pytest tests -q -rs
 
 models-fetch:
-	bash scripts/fetch_mlx_weights.sh
+	@if [ -f "$(MLX_CACHE)/htdemucs_6s.safetensors" ] && [ -f "$(MLX_CACHE)/htdemucs_6s_config.json" ]; then \
+		echo "weights present in $(MLX_CACHE)"; \
+	else \
+		mkdir -p "$(MLX_CACHE)"; \
+		DEMUCS_MLX_NO_DOWNLOAD=0 uv run python -m demucs_mlx.hub download htdemucs_6s --output-dir "$(MLX_CACHE)"; \
+	fi
 
-models-convert:
-	@test -x "$(PYTHON)" || (echo "ERROR: missing $(PYTHON) — uv sync --extra convert" >&2; exit 1)
-	mkdir -p models
-	DEMUCS_MLX_CACHE="$(CURDIR)/models" "$(PYTHON)" -c "from demucs_mlx.model_converter import get_mlx_model; get_mlx_model('htdemucs_6s'); print('ok')"
-	test -f models/htdemucs_6s_mlx.pkl
+# Re-export the C worker's weights/config/keys + models/export_manifest.json (commit the diff).
+models-export: models-fetch
+	uv run python scripts/export_safetensors.py -n htdemucs_6s -o models
 
-models-export:
-	mkdir -p models
-	DEMUCS_MLX_CACHE="$(CURDIR)/models" uv run python scripts/export_safetensors.py -n htdemucs_6s -o models
+# Fail if the export no longer matches the committed manifest (upstream drift).
+models-check: models-fetch
+	uv run python scripts/export_safetensors.py --check
 
-goldens: models-export
-	DEMUCS_MLX_CACHE="$(CURDIR)/models" uv run python scripts/dump_goldens.py -n htdemucs_6s
+# Upgrade flow only: like models-check but tolerates the demucs-mlx version differing.
+models-check-upgrade: models-fetch
+	uv run python scripts/export_safetensors.py --check --allow-version-change
+
+goldens: models-fetch
+	uv run python scripts/dump_goldens.py -n htdemucs_6s
 
 bench:
-	DEMUCS_MLX_CACHE="$(CURDIR)/models" uv run python tests/bench_compare.py --durations 10 $(if $(C_WORKER),--c-worker "$(C_WORKER)",)
+	uv run python tests/bench_compare.py --durations 10 $(if $(C_WORKER),--c-worker "$(C_WORKER)",) $(if $(FROZEN),--frozen "$(FROZEN)",)
 
 worker-c:
 	cmake -S worker-c -B worker-c/build -DCMAKE_BUILD_TYPE=Release
@@ -66,6 +80,38 @@ worker-c-test: worker-c
 	else \
 		echo "skip test_compare (export models + goldens first)"; \
 	fi
+
+# Stage the C worker for demucs-ui-app.
+worker: worker-c
+	mkdir -p dist/worker
+	cp worker-c/build/demucs_mlx_worker dist/worker/demucs_mlx_worker
+	cp worker-c/build/_deps/mlx-build/mlx/backend/metal/kernels/mlx.metallib dist/worker/mlx.metallib
+	test -x dist/worker/demucs_mlx_worker
+
+# Frozen worker_py (PyInstaller onedir) -> dist/worker/demucs_mlx_worker/ (release layout).
+worker-pyinstaller worker-py:
+	DEMUCS_MLX_PYTHON="$(PYTHON)" bash scripts/freeze_worker.sh
+
+# Same, into dist/worker-py so it does not clobber the staged C worker. Used by verify/CI.
+worker-py-verify-build:
+	DEMUCS_MLX_PYTHON="$(PYTHON)" DEMUCS_MLX_WORKER_DIST="$(CURDIR)/dist/worker-py" bash scripts/freeze_worker.sh
+
+# The gate. Order: cheap static checks first, drift check before anything expensive.
+verify: lint models-check models-export worker-c worker-py-verify-build
+	$(MAKE) worker-c-test
+	uv run pytest tests -q -rs
+	@echo "verify OK: upstream $$(uv run python -c 'import demucs_mlx;print(demucs_mlx.__version__)')"
+
+# After changing the demucs-mlx pin in pyproject.toml: relock, make sure the C worker's
+# contract (tensors/config/bytes) survived, re-record the manifest, then run the full gate.
+# A contract break stops here (fix worker-c / re-export deliberately, do not paper over it).
+upgrade-check:
+	uv lock
+	uv sync --extra dev --extra freeze
+	$(MAKE) models-fetch models-check-upgrade
+	$(MAKE) models-export
+	$(MAKE) verify
+	@git --no-pager diff --stat -- pyproject.toml uv.lock models/ || true
 
 clean:
 	rm -rf dist .ruff_cache .pytest_cache worker-c/build

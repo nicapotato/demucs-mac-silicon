@@ -1,0 +1,25 @@
+{
+  "defaults": {
+    "overlap": 0.25,
+    "shifts": 1,
+    "split": true
+  },
+  "export": {
+    "config_sha256": "e990b20a41750df94daa5aa615d87a19a0f44d72e40cc29d84559536fcc7187f",
+    "keys_sha256": "ef62abe2dcd1b8d1069b09bd5b638cdda0ee3f999272e32e93c65a66ef0019df",
+    "num_tensors": 565,
+    "safetensors_sha256": "8651c2d2830f470880520aab5f99cb9d20f6fc736c065e9a8efbbf87bdceb7e9"
+  },
+  "mlx_c": {
+    "embedded_mlx": "0.32.2",
+    "tag": "v0.7.0"
+  },
+  "mlx_python": "0.32.3",
+  "model": "htdemucs_6s",
+  "schema": 1,
+  "source_cache_sha256": "d298f7f746bf53c21baad44fb08e88807ef47feb551dd22f1601a546c85b8e02",
+  "upstream": {
+    "package": "demucs-mlx",
+    "version": "1.6.1"
+  }
+}

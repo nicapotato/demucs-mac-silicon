@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Freeze demucs-mlx CLI into a standalone onedir worker with PyInstaller.
-# Intentionally excludes torch/demucs (conversion-only deps). Inference uses
-# pre-bundled MLX weights (DEMUCS_MLX_CACHE / models/).
+# Freeze the worker_py wrapper (over upstream demucs-mlx) into a standalone onedir
+# worker with PyInstaller. Intentionally excludes torch/demucs (conversion-only
+# deps). Weights come from DEMUCS_MLX_CACHE_DIR / DEMUCS_MLX_CACHE, or upstream's
+# digest-checked download on first use unless --offline / DEMUCS_MLX_NO_DOWNLOAD=1.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -21,7 +22,7 @@ mkdir -p "$SPEC_WORK"
 
 ENTRY="$SPEC_WORK/demucs_mlx_worker.py"
 cat >"$ENTRY" <<'PY'
-"""Frozen demucs-mlx worker entry.
+"""Frozen worker entry (worker_py over upstream demucs-mlx).
 
 mlx-audio-io refuses to load its native .so unless the on-disk bytes match the
 wheel RECORD hash and pass codesign --verify. PyInstaller / ad-hoc codesign of
@@ -42,13 +43,13 @@ def _patch_mlx_audio_io_preflight() -> None:
 
 _patch_mlx_audio_io_preflight()
 
-from demucs_mlx.separate import main
+from worker_py.cli import main
 
 raise SystemExit(main())
 PY
 
 cd "$SPEC_WORK"
-# --paths so editable installs still resolve the source package
+# --paths so editable installs still resolve worker_py
 "$PYTHON" -m PyInstaller \
   --noconfirm \
   --clean \
@@ -58,9 +59,11 @@ cd "$SPEC_WORK"
   --collect-all mlx \
   --collect-all mlx_audio_io \
   --collect-all mlx_spectro \
-  --collect-submodules demucs_mlx \
+  --collect-all demucs_mlx \
+  --collect-submodules worker_py \
   --hidden-import lameenc \
-  --hidden-import demucs_mlx.separate \
+  --hidden-import worker_py.cli \
+  --hidden-import demucs_mlx.api \
   --hidden-import demucs_mlx.model_converter \
   --hidden-import demucs_mlx.apply_mlx \
   --hidden-import demucs_mlx.audio \

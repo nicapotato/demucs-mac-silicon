@@ -1,120 +1,103 @@
 # demucs-mac-silicon
 
-Apple Silicon MLX worker for Demucs stem separation. Frozen `demucs_mlx_worker` is
-consumed by [demucs-ui-app](https://github.com/nicapotato/demucs-ui-app).
+Apple Silicon Demucs workers, consumed by [demucs-ui-app](https://github.com/nicapotato/demucs-ui-app):
 
-This is the MLX inference package (fork of [demucs-mlx](https://github.com/ssmall256/demucs-mlx)).
+| Worker | What it is |
+|---|---|
+| **worker-py** (`worker_py/`) | Thin wrapper over **upstream [demucs-mlx](https://github.com/ssmall256/demucs-mlx), pinned exactly**. Adds the GUI contract (JSON progress events, MP3, `--track-name`). Frozen with PyInstaller. |
+| **worker-c** (`worker-c/`) | Independent C implementation of htdemucs_6s on [mlx-c](https://github.com/ml-explore/mlx-c). ~30 MB, no Python. |
+
 The standalone GUI lives in **demucs-ui-app**. Windows CUDA lives in
 [demucs-windows](https://github.com/nicapotato/demucs-windows). Version: [`project.conf`](project.conf).
 
-## Features
-
-- **~73x realtime** on Apple Silicon — 2.6x faster than Demucs with PyTorch MPS
-- **Bit-exact parity** with upstream Demucs stems (within floating-point tolerance)
-- Custom fused Metal kernels (GroupNorm+GELU, GroupNorm+GLU, OLA)
-- No PyTorch required at inference time
-- Automatic resampling — input files at any sample rate are resampled to the model rate
-- Audio I/O via [mlx-audio-io](https://github.com/ssmall256/mlx-audio-io)
-- STFT/iSTFT via [mlx-spectro](https://github.com/ssmall256/mlx-spectro)
+demucs-mlx is no longer vendored or forked here. See **[docs/upgrading.md](docs/upgrading.md)**
+for how upstream changes are tracked and how to be sure they work.
 
 ## Requirements
 
-- Python >= 3.10
-- macOS with Apple Silicon
+- macOS on Apple Silicon, Python >= 3.10, [uv](https://docs.astral.sh/uv/)
+- CMake + Xcode command line tools (worker-c only)
 
-## Install / CLI
-
-```bash
-uv lock
-uv sync
-uv run demucs-mlx /path/to/audio.wav
-```
-
-On first run, demucs-mlx loads cached MLX weights if available. To bootstrap a missing
-model, install the conversion extra:
+## Quick start
 
 ```bash
-uv sync --extra convert
+make sync                 # uv sync --extra dev --extra freeze
+make models-fetch         # upstream weights -> models/mlx-cache (digest-checked)
+uv run demucs-mlx-worker song.wav -o out -n htdemucs_6s
 ```
 
-Options:
+Also `python -m worker_py ...`. Options:
 
 ```
--n, --name          Model name (default: htdemucs)
--o, --out           Output directory (default: separated)
---shifts            Number of random shifts (default: 1)
---seed              Optional RNG seed for reproducible shifts (default: none)
---overlap           Overlap ratio (default: 0.25)
--b, --batch-size    Batch size (default: 8)
---write-workers     Concurrent writer threads (default: 1)
---list-models       List available models
--v, --verbose       Verbose logging
+-n, --name            Model name (default: htdemucs_6s)
+-o, --out             Output directory (default: separated)
+--track-name NAME     Output subfolder (default: input stem)
+--shifts N            Random shifts (default: 1)       --seed N
+--overlap F           Overlap ratio (default: 0.25)    --segment SECONDS
+-b, --batch-size      int or auto (default: auto)
+--no-split            Disable chunked inference
+--attention fp16|fp32 Attention kernel precision (upstream default: fp16)
+--compile/--no-compile
+--mp3 [--mp3-bitrate N]   MP3 stems instead of WAV
+--progress-json       Line-delimited JSON events on stdout (the GUI contract)
+--prefetch-tracks N   Accepted and ignored (GUI compatibility)
+--offline             Never download weights
+--list-models
 ```
 
-## Frozen worker
+JSON events (`worker_py/events.py`; worker-c emits the same stream):
+`status` (`loading_model`, `model_ready`), `loading`, `separating` (`done`, `total`, `pct`),
+`writing`, `done`, `error`.
+
+Environment:
+
+| Variable | Purpose |
+|---|---|
+| `DEMUCS_MLX_CACHE_DIR` | Upstream weights cache (wins) |
+| `DEMUCS_MLX_CACHE` | GUI's historic name. Used as the cache dir, or `<dir>/mlx` if `<dir>` holds a C-worker export |
+| `DEMUCS_MLX_NO_DOWNLOAD=1` | Never download weights (same as `--offline`) |
+| `DEMUCS_MLX_PYTHON` | Python used by `scripts/freeze_worker.sh` |
+| `DEMUCS_MLX_WORKER_DIST` | Freeze output dir (default `dist/worker`) |
+
+## Build
 
 ```bash
-make worker
-# → dist/worker/demucs_mlx_worker/demucs_mlx_worker
+make worker-pyinstaller   # frozen worker-py  -> dist/worker/demucs_mlx_worker/
+make worker               # worker-c + metallib -> dist/worker/demucs_mlx_worker (file)
+make models-export        # C weights/config/keys + models/export_manifest.json
 ```
 
-CI (`make ci`) runs tests and uploads a 90-day Actions artifact. Permanent pins:
+## Verify and upgrade upstream
 
 ```bash
-make release          # tag v$(VERSION) from project.conf
+make verify          # lint, drift check, C build+tests, frozen build, parity + contract tests
+make upgrade-check   # after bumping the demucs-mlx pin: relock, contract check, re-record, verify
+```
+
+A weekly workflow (`upstream-watch`) opens a PR when PyPI has a newer demucs-mlx.
+
+## Release
+
+Bump `VERSION` in `project.conf`, then:
+
+```bash
 make release-watch
 ```
 
-That publishes `demucs-mlx-worker-mac-arm64-vX.Y.Z.zip` plus `htdemucs_6s_mlx.pkl` on a
-GitHub Release, and creates the immutable weights tag in `MODELS_RELEASE_TAG` the first
-time. Later CI downloads that tag instead of reconverting. Product zips / itch.io stay
-in demucs-ui-app.
-
-## Python usage
-
-```python
-from demucs_mlx import Separator
-
-separator = Separator()
-origin, stems = separator.separate_audio_file("song.wav")
-
-for name, audio in stems.items():
-    print(f"{name}: {audio.shape}")
-```
-
-## Models
-
-| Model | Sources | Description |
-|-------|---------|-------------|
-| `htdemucs` | 4 | Hybrid Transformer Demucs (default) |
-| `htdemucs_ft` | 4 | Fine-tuned HTDemucs |
-| `htdemucs_6s` | 6 | 6-source (adds piano, guitar) |
-| `hdemucs_mmi` | 4 | Hybrid Demucs MMI |
-| `mdx` | 4 | Music Demixing model |
-| `mdx_extra` | 4 | MDX with extra training |
-
-The frozen worker / GUI bundle **htdemucs_6s**. Converted MLX weights are a ~105 MB
-pickle (`htdemucs_6s_mlx.pkl`). They are **not** stored in git.
-
-**Distribution:** GitHub Release, not Actions artifacts (those expire) and not git-lfs.
-
-- First `make release` converts from official PyTorch Demucs, then publishes pickle +
-  sha256 on immutable tag `MODELS_RELEASE_TAG` (currently `models-htdemucs-6s-mlx-1`).
-- That tag is never overwritten. If conversion inputs change, bump `MODELS_RELEASE_TAG`
-  in `project.conf` and cut another release.
-- Fetch a pin: `make models-fetch` (needs `gh`). Bootstrap without a pin:
-  `uv sync --extra convert && make models-convert`.
-
-Official PyTorch checkpoints already live on Meta's Demucs hosts; this repo only stores
-the **derived MLX pickle**. Hugging Face Hub is a fine public CDN if you want a model
-card later — it is not required for pinning.
+Runs the same gate, then tags `v$VERSION` and publishes the frozen worker-py zip, the
+worker-c zip, upstream-format weights (`htdemucs_6s.safetensors` + config) and
+`export_manifest.json` (pinned upstream version and hashes) on a GitHub Release.
 
 ## Documentation
 
-- API reference: `docs/api.md`
-- Development workflow: `docs/development.md`
+- Upstream tracking: `docs/upgrading.md`
+- Development: `docs/development.md`
+- Release: `docs/release.md`
 - Platform notes: `docs/platform.md`
+- Python API (upstream's): `docs/api.md`
+- Patches we want upstream: `upstream-patches/README.md`
 
 ## License
 
-MIT. Based on [Demucs](https://github.com/adefossez/demucs) by Meta Research. See `LICENSE` for details.
+MIT. Built on [demucs-mlx](https://github.com/ssmall256/demucs-mlx) and
+[Demucs](https://github.com/adefossez/demucs) by Meta Research. See `LICENSE`.

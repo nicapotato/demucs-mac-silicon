@@ -5,8 +5,11 @@ dist/
 models/*.pkl
 models/*.sha256
 models/*.safetensors
-models/*.keys.txt
-goldens/
+models/mlx-cache/
+goldens/*
+!goldens/htdemucs_6s/
+goldens/htdemucs_6s/*
+!goldens/htdemucs_6s/meta.json
 worker-c/build/
 .DS_Store
 *.pyc

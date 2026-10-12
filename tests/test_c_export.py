@@ -5,7 +5,7 @@ import math
 
 import numpy as np
 
-from demucs_mlx.c_export import (
+from worker_py.c_export import (
     flatten_params,
     read_wav_float,
     save_safetensors,

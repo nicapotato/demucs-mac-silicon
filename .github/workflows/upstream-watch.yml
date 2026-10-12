@@ -1,0 +1,152 @@
+name: upstream-watch
+
+# Weekly: if PyPI has a newer demucs-mlx than pyproject.toml pins, bump the pin, run
+# `make upgrade-check` (contract check + full verify) and open a PR with the result.
+# A failing check still opens the PR (as a draft) so the breakage is visible.
+#
+# NOTE: PRs opened with GITHUB_TOKEN do not trigger other workflows, which is why this
+# job runs the full gate itself. Merging stays manual.
+# Repo setting required: Settings > Actions > General > "Allow GitHub Actions to
+# create and approve pull requests".
+
+on:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Force a specific demucs-mlx version (default: latest on PyPI)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  PYTHON_VERSION: "3.12"
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      current: ${{ steps.v.outputs.current }}
+      target: ${{ steps.v.outputs.target }}
+      bump: ${{ steps.v.outputs.bump }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        env:
+          FORCE: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          CURRENT=$(sed -nE 's/.*"demucs-mlx==([^"]+)".*/\1/p' pyproject.toml | head -1)
+          test -n "$CURRENT"
+          if [ -n "${FORCE}" ]; then
+            TARGET="${FORCE}"
+          else
+            TARGET=$(curl -fsS https://pypi.org/pypi/demucs-mlx/json \
+              | python3 -c "import sys,json; print(json.load(sys.stdin)['info']['version'])")
+          fi
+          NEWER=$(python3 - "$CURRENT" "$TARGET" <<'PY'
+          import sys
+          def key(v): return tuple(int(p) for p in v.split(".") if p.isdigit())
+          print("true" if key(sys.argv[2]) > key(sys.argv[1]) else "false")
+          PY
+          )
+          BRANCH="upstream/demucs-mlx-${TARGET}"
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            echo "Branch $BRANCH already exists; skipping"
+            NEWER=false
+          fi
+          echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
+          echo "target=${TARGET}" >> "$GITHUB_OUTPUT"
+          echo "bump=${NEWER}" >> "$GITHUB_OUTPUT"
+          echo "pinned ${CURRENT}, latest ${TARGET}, bump=${NEWER}"
+
+  bump:
+    needs: check
+    if: needs.check.outputs.bump == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 90
+    env:
+      CURRENT: ${{ needs.check.outputs.current }}
+      TARGET: ${{ needs.check.outputs.target }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Bump the pin
+        run: |
+          set -euo pipefail
+          sed -i '' -E "s/demucs-mlx(\[convert\])?==${CURRENT}/demucs-mlx\1==${TARGET}/g" pyproject.toml
+          grep -n "demucs-mlx" pyproject.toml
+
+      - name: make upgrade-check
+        id: gate
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          make upgrade-check 2>&1 | tee upgrade-check.log
+
+      - name: Collect upstream release notes
+        run: |
+          gh release view "v${TARGET}" --repo ssmall256/demucs-mlx --json body -q .body \
+            > upstream-notes.md 2>/dev/null || echo "(no GitHub release notes for v${TARGET})" > upstream-notes.md
+
+      - name: Open PR
+        env:
+          OUTCOME: ${{ steps.gate.outcome }}
+        run: |
+          set -euo pipefail
+          BRANCH="upstream/demucs-mlx-${TARGET}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add pyproject.toml uv.lock models/export_manifest.json models/htdemucs_6s.json models/htdemucs_6s.keys.txt || true
+          git commit -m "chore: bump demucs-mlx ${CURRENT} -> ${TARGET}" || true
+          git push origin "$BRANCH"
+          {
+            echo "Automated bump of the pinned upstream **demucs-mlx ${CURRENT} -> ${TARGET}**."
+            echo
+            echo "Gate (\`make upgrade-check\`): **${OUTCOME}**"
+            echo
+            echo "- [Upstream release](https://github.com/ssmall256/demucs-mlx/releases/tag/v${TARGET})"
+            echo "- [Compare](https://github.com/ssmall256/demucs-mlx/compare/v${CURRENT}...v${TARGET})"
+            echo "- Checklist and failure triage: \`docs/upgrading.md\`"
+            echo
+            echo "<details><summary>Upstream release notes</summary>"
+            echo
+            cat upstream-notes.md
+            echo
+            echo "</details>"
+            echo
+            echo "<details><summary>Gate log (tail)</summary>"
+            echo
+            echo '```'
+            tail -n 60 upgrade-check.log
+            echo '```'
+            echo "</details>"
+          } > pr-body.md
+          DRAFT=""
+          if [ "$OUTCOME" != "success" ]; then DRAFT="--draft"; fi
+          gh pr create --base "${GITHUB_REF_NAME}" --head "$BRANCH" \
+            --title "chore: bump demucs-mlx ${CURRENT} -> ${TARGET}" \
+            --body-file pr-body.md $DRAFT
+
+      - name: Upload gate log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upgrade-check-log
+          path: upgrade-check.log
+          if-no-files-found: ignore

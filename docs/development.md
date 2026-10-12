@@ -1,46 +1,43 @@
 # Development
 
-This project is uv-first and uses `uv.lock` to pin dependencies.
+uv-first. `uv.lock` pins everything; `demucs-mlx` is pinned with `==` in `pyproject.toml`.
 
 ## Setup
 
 ```bash
-uv lock
-uv sync --extra dev
+make sync            # uv sync --extra dev --extra freeze
+make models-fetch    # weights -> models/mlx-cache
 ```
 
-## Lint and type check
+## Everyday
 
 ```bash
-uv run ruff check demucs_mlx tests
-uv run pyright
+make test-fast       # ruff + pyright + tests that need no weights/binaries
+make test            # full pytest (model / worker-c / frozen tests skip if artifacts missing)
+make verify          # build everything, then run every gate (nothing skips)
 ```
 
-## Format
+Format: `uv run ruff format worker_py` (CI checks `ruff check`).
 
-```bash
-uv run ruff format demucs_mlx
-```
+## Layout
 
-## Tests
+| Path | Role |
+|---|---|
+| `worker_py/` | GUI-facing wrapper over upstream: `cli`, `events`, `progress`, `mp3`, `cache` |
+| `worker_py/c_export.py`, `contract.py` | export for worker-c and the drift/contract checks |
+| `worker_py/parity.py` | run two workers on a clip and compare |
+| `worker-c/` | C worker (mlx-c); `src/test_*.c` unit tests |
+| `scripts/` | `export_safetensors.py`, `dump_goldens.py`, `freeze_worker.sh` |
+| `models/` | `mlx-cache/` (upstream weights, ignored), C export + tracked `*.keys.txt`, `*.json`, `export_manifest.json` |
+| `goldens/htdemucs_6s/` | numeric goldens for the C worker (only `meta.json` is tracked) |
+| `upstream-patches/` | changes we want upstream |
 
-```bash
-make test
-```
+## Goldens
 
-## Build
+`make goldens` regenerates `goldens/htdemucs_6s/` from the pinned upstream. It reaches into
+upstream model internals, so it may need a fix after a bump. The end-to-end py-vs-c gate is
+the main check; goldens localise a failure.
 
-```bash
-uv run python -m build
-```
+## Upgrading upstream
 
-## Release
-
-Bump `VERSION` in `project.conf` (and `MODELS_RELEASE_TAG` only if the MLX pickle
-must change), then:
-
-```bash
-make release-watch
-```
-
-This tags `v$VERSION` and stores the frozen worker + pickle on a GitHub Release.
+See [upgrading.md](upgrading.md).

@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Benchmark harness for the Python MLX worker (the C-worker high bar)."""
+"""Benchmark harness: worker-py (reference), frozen worker and worker-c timings + parity.
+
+Timings only; pass/fail gates live in tests/test_parity.py."""
 from __future__ import annotations
 
 import argparse
@@ -8,7 +10,6 @@ import os
 import resource
 import shutil
 import statistics
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -47,86 +48,33 @@ def _make_clip(path: Path, seconds: float, samplerate: int, seed: int) -> None:
     rng = np.random.default_rng(seed)
     n = int(samplerate * seconds)
     audio = rng.standard_normal((2, n), dtype=np.float32) * 0.1
-    from demucs_mlx.c_export import write_wav_pcm16
+    from worker_py.c_export import write_wav_pcm16
 
     write_wav_pcm16(path, audio, samplerate)
 
 
-def _run_cli(
-    tracks: list[Path],
-    out_dir: Path,
-    *,
-    name: str,
-    seed: int,
-    overlap: float,
-    batch_size: int,
-    extra: list[str],
-    frozen_bin: Path | None,
-) -> dict:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    cmd: list[str]
-    if frozen_bin is not None:
-        cmd = [str(frozen_bin)]
-    else:
-        cmd = [sys.executable, "-m", "demucs_mlx"]
-    cmd += [
-        "-n",
-        name,
-        "-o",
-        str(out_dir),
-        "--seed",
-        str(seed),
-        "--overlap",
-        str(overlap),
-        "-b",
-        str(batch_size),
-        "--shifts",
-        "1",
-        "--progress-json",
-        *extra,
-        *[str(t) for t in tracks],
-    ]
-    t0 = time.perf_counter()
-    proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True)
-    wall = time.perf_counter() - t0
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"worker failed ({proc.returncode}): {proc.stderr[-2000:]}\n{proc.stdout[-1000:]}"
-        )
-    return {"wall_s": wall, "cmd": cmd, "stdout": proc.stdout, "stderr": proc.stderr}
+def _run_cli(tracks, out_dir, *, name, seed, overlap, batch_size, extra, frozen_bin):
+    """Run one worker on tracks[0] (worker_py unless ``frozen_bin`` is a binary)."""
+    from worker_py import parity
+
+    cmd = [str(frozen_bin)] if frozen_bin is not None else parity.PY_WORKER
+    res = parity.run_worker(
+        cmd, Path(tracks[0]), out_dir, track_name=Path(tracks[0]).stem, seed=seed,
+        overlap=overlap, batch_size=batch_size, shifts=1, extra=list(extra),
+    )
+    return {"wall_s": res.wall_s, "cmd": cmd, "stdout": res.stdout, "stderr": res.stderr}
 
 
 def _load_stems(out_dir: Path, track_stem: str) -> dict[str, np.ndarray]:
-    from demucs_mlx.c_export import read_wav_float
+    from worker_py import parity
 
-    track_dir = out_dir / track_stem
-    stems = {}
-    for src in SOURCES:
-        wav_path = track_dir / f"{src}.wav"
-        if not wav_path.exists():
-            raise FileNotFoundError(wav_path)
-        audio, _sr = read_wav_float(wav_path)
-        stems[src] = audio
-    return stems
+    return parity.load_stems(out_dir, track_stem)
 
 
 def _quality(ref: dict[str, np.ndarray], est: dict[str, np.ndarray]) -> dict:
-    from demucs_mlx.c_export import si_sdr
+    from worker_py import parity
 
-    per: dict[str, dict[str, float]] = {}
-    max_abs = 0.0
-    for src in SOURCES:
-        a = ref[src]
-        b = est[src]
-        n = min(a.shape[-1], b.shape[-1])
-        a = a[..., :n]
-        b = b[..., :n]
-        diff = np.abs(a - b)
-        src_max = float(diff.max()) if diff.size else 0.0
-        rmse = float(np.sqrt(np.mean(diff * diff))) if diff.size else 0.0
-        per[src] = {"max_abs": src_max, "rmse": rmse, "si_sdr_db": si_sdr(a, b)}
-        max_abs = max(max_abs, src_max)
-    return {"per_stem": per, "max_abs": max_abs}
+    return parity.quality(ref, est)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -165,10 +113,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    from demucs_mlx.model_converter import get_mlx_model
-
-    model = get_mlx_model(args.name)
-    sr = int(model.samplerate)
+    sr = 44100  # htdemucs_6s native rate
     durations = [float(x) for x in str(args.durations).split(",") if x.strip()]
     out_root = Path(args.out)
     clips_dir = out_root / "clips"

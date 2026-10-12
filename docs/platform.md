@@ -6,44 +6,45 @@ lives in [demucs-windows](https://github.com/nicapotato/demucs-windows).
 
 ## macOS (Apple Silicon)
 
-- Apple Silicon is supported via MLX.
+- Apple Silicon is supported via MLX (worker-py) and mlx-c (worker-c).
 - Audio I/O is handled natively by mlx-audio-io (no FFmpeg required).
 
 Typical flow:
 
 ```bash
-uv lock
-uv sync
-uv run demucs-mlx /path/to/audio.wav
+make sync
+make models-fetch
+uv run demucs-mlx-worker /path/to/audio.wav -o out
 ```
 
 Freeze the standalone worker (consumed by demucs-ui-app):
 
 ```bash
-uv sync --extra convert
-DEMUCS_MLX_PYTHON=.venv/bin/python bash scripts/freeze_worker.sh
+make worker-pyinstaller    # -> dist/worker/demucs_mlx_worker/
 ```
 
 Env vars:
 
 | Variable | Purpose |
 |----------|---------|
-| `DEMUCS_MLX_PYTHON` | Python that has `demucs_mlx` (freeze / GUI) |
-| `DEMUCS_MLX_WORKER` | Path to frozen MLX worker binary |
-| `DEMUCS_MLX_CACHE` | Directory with `htdemucs_6s_mlx.pkl` |
+| `DEMUCS_MLX_PYTHON` | Python that has the project installed (freeze) |
+| `DEMUCS_MLX_WORKER` | Path to a frozen worker binary (GUI) |
+| `DEMUCS_MLX_CACHE_DIR` | Upstream weights cache (safetensors + config) |
+| `DEMUCS_MLX_CACHE` | GUI's name: weights dir; `<dir>/mlx` is used if `<dir>` holds a C export |
+| `DEMUCS_MLX_NO_DOWNLOAD` | `1`: never download weights |
 | `DEMUCS_MLX_WORKER_DIST` | Override freeze output dir (default `dist/worker`) |
 
-Pinned converted weights live on GitHub Release `MODELS_RELEASE_TAG` in `project.conf`.
-`make models-fetch` downloads them; `make models-convert` rebuilds from PyTorch.
+Weights are downloaded by upstream demucs-mlx on first use (SHA-256 checked). `make models-fetch`
+prefetches them; worker-c reads its own export via `make models-export`. See
+[upgrading.md](upgrading.md).
 
 ## Linux
 
 - Python >= 3.10 required.
 
 ```bash
-uv lock
 uv sync
-uv run demucs-mlx /path/to/audio.wav
+uv run demucs-mlx-worker /path/to/audio.wav
 ```
 
 The raylib GUI is not packaged for Linux.

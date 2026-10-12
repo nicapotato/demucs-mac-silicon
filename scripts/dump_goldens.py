@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-"""Dump HTDemucs_6s intermediate tensors for C numeric gates."""
+"""Dump HTDemucs_6s intermediate tensors for C numeric gates.
+
+Dev-only: reaches into upstream model internals (demucs_mlx.mlx_utils, HTDemucsMLX
+attributes), so it can break on an upstream bump. If it does, keep the committed
+goldens and rely on the end-to-end py-vs-c parity gate (tests/test_parity.py).
+"""
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -37,16 +43,18 @@ def main(argv: list[str] | None = None) -> int:
         help="Clip length in seconds (default: model.segment)",
     )
     args = parser.parse_args(argv)
+    os.environ.setdefault("DEMUCS_MLX_CACHE_DIR", str(ROOT / "models" / "mlx-cache"))
 
-    from demucs_mlx.c_export import (
+    from demucs_mlx.mlx_utils import center_trim
+    from demucs_mlx.model_converter import get_mlx_model
+
+    from worker_py.c_export import (
         flatten_params,
         model_config_dict,
         save_safetensors,
         unwrap_htdemucs,
         write_wav_pcm16,
     )
-    from demucs_mlx.mlx_utils import center_trim
-    from demucs_mlx.model_converter import get_mlx_model
 
     model = unwrap_htdemucs(get_mlx_model(args.name))
     if hasattr(model, "eval"):

@@ -1,32 +1,23 @@
-# Release notes for demucs-mlx
+# Release
 
-## v1.4.4
+1. `make verify` (CI runs the same gate before publishing).
+2. Bump `VERSION` in `project.conf`.
+3. `make release-watch` (dispatches `.github/workflows/release.yml`).
 
-Bugfix release for GitHub issue #1.
+The workflow: reads the version and pinned upstream, runs `ci.yml` (`make verify`), checks the
+downloaded weights hash against `models/export_manifest.json`, builds worker-c and the frozen
+worker-py, then publishes on tag `v$VERSION`:
 
-- Fixed split-mode overlap-add accumulation on MLX 0.31.2, where long multi-segment inputs could reconstruct with 100x+ amplitude spikes.
-- Added an identity-model regression test for overlap-add correctness across multiple durations, overlaps, and batch sizes.
-- Added an optional `htdemucs` reproduction test and focused overlap-add benchmark script for release validation.
-- Kept `mlx-weights` as an optional local integration; published installs fall back to the built-in `[convert]` path when it is not installed.
+| Asset | Purpose |
+|---|---|
+| `demucs-mlx-worker-py-mac-arm64-vX.Y.Z.zip` | frozen worker_py (PyInstaller onedir) |
+| `demucs-mlx-worker-c-mac-arm64-vX.Y.Z.zip` | worker-c binary + `mlx.metallib` |
+| `htdemucs_6s.safetensors`, `htdemucs_6s_config.json` | upstream-format weights for offline bundles (`DEMUCS_MLX_CACHE_DIR` layout) |
+| `export_manifest.json` | pinned demucs-mlx version, hashes, mlx / mlx-c pairing |
+| `SHA256SUMS` | checksums |
 
-## v1.0.0
+The old converted pickle (`htdemucs_6s_mlx.pkl`) and the immutable `MODELS_RELEASE_TAG` pin are
+gone: upstream now distributes digest-checked safetensors, and the manifest records the exact
+hash each release was validated against.
 
-MLX-native inference release. No PyTorch required at runtime.
-
-- Pure MLX inference pipeline (Conv1d, Conv2d, Transformer, STFT/iSTFT)
-- Custom fused Metal kernels: GroupNorm+GELU, GroupNorm+GLU, GLU, OLA, complex-to-interleaved
-- Metal-free fallbacks for non-Apple platforms (Linux)
-- Audio I/O via mlx-audio-io (replaces torchcodec/torchaudio/soundfile)
-- STFT/iSTFT via mlx-spectro
-- ~73x realtime on Apple Silicon — 2.6x faster than Demucs with PyTorch MPS
-- Public Python API: `Separator`, `save_audio`, `list_models`
-- CLI: `demucs-mlx` with threaded audio prefetch and parallel stem writing
-- Native Conv1d resampling (replaces torchaudio resampling)
-- Optional `[convert]` extra for one-time PyTorch weight conversion
-
-### Differences from upstream Demucs
-
-- Inference only — no training code
-- Callbacks not yet supported in `Separator`
-- Automatic resampling via mlx-audio-io when input sample rate differs from model (44100 Hz)
-- PyTorch only needed for initial model weight conversion via `pip install 'demucs-mlx[convert]'`; local development can also use the optional `mlx-weights` shared cache.
+Upstream release history lives at https://github.com/ssmall256/demucs-mlx/releases.

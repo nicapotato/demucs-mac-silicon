@@ -1,5 +1,9 @@
 name: ci
 
+# Runs the same gate you run locally: `make verify`
+# (lint, upstream-drift check, C worker build + unit tests, frozen-worker build,
+#  py vs c vs frozen parity, GUI JSON-event contract).
+
 on:
   workflow_dispatch:
     inputs:
@@ -8,14 +12,14 @@ on:
         required: false
         default: ""
         type: string
-      freeze_worker:
-        description: "Freeze PyInstaller worker and upload artifact"
-        required: false
-        default: true
-        type: boolean
+  pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+  workflow_call:
 
 concurrency:
-  group: ci-${{ github.sha }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: true
 
 permissions:
@@ -26,17 +30,10 @@ env:
   GH_TOKEN: ${{ github.token }}
 
 jobs:
-  python:
+  static:
     runs-on: macos-latest
-    timeout-minutes: 40
+    timeout-minutes: 20
     steps:
-      - name: Block re-runs
-        if: github.run_attempt != 1
-        shell: bash
-        run: |
-          echo "::error::Re-runs are disabled (attempt ${{ github.run_attempt }}). Dispatch a new run instead." >&2
-          exit 1
-
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
@@ -47,52 +44,16 @@ jobs:
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --extra dev --extra freeze
 
-      - name: Lint
-        run: uv run ruff check demucs_mlx tests
+      - name: Lint, type check, tests that need no weights
+        run: make test-fast
 
-      - name: Type check
-        run: uv run pyright
-
-      - name: Run kernel tests
-        run: uv run python tests/test_metal_kernels.py
-
-      - name: Run apply_model chunk/seed regression
-        run: uv run python tests/test_apply_model_chunk_seed.py
-
-      - name: Run optional mlx-weights integration regression
-        run: uv run python tests/test_model_converter_optional_mlx_weights.py
-
-      - name: Run apply_model overlap-add regression
-        run: uv run python tests/test_apply_model_overlap_add.py
-
-      - name: Test CLI
-        run: uv run demucs-mlx --list-models
-
-      - name: Test import
-        run: |
-          uv run python -c "
-          from demucs_mlx import Separator, save_audio, list_models
-          models = list_models()
-          print('Models:', models)
-          assert 'htdemucs' in models['single']
-          print('Import test passed')
-          "
-
-  freeze-worker:
+  verify:
     runs-on: macos-latest
-    timeout-minutes: 40
-    needs: python
-    if: github.event.inputs.freeze_worker == 'true'
+    timeout-minutes: 60
+    needs: static
     steps:
-      - name: Block re-runs
-        if: github.run_attempt != 1
-        shell: bash
-        run: |
-          echo "::error::Re-runs are disabled (attempt ${{ github.run_attempt }}). Dispatch a new run instead." >&2
-          exit 1
-
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
@@ -102,64 +63,52 @@ jobs:
       - name: Install uv
         run: curl -LsSf https://astral.sh/uv/install.sh | sh
 
-      - name: Install convert + freeze deps
-        run: |
-          set -euo pipefail
-          uv venv .venv --python "${{ env.PYTHON_VERSION }}"
-          source .venv/bin/activate
-          uv pip install -e '.[convert]' lameenc pyinstaller
+      - name: Install dependencies
+        run: uv sync --extra dev --extra freeze
 
-      - name: Check pinned models GitHub Release
-        id: pin
-        run: |
-          set -euo pipefail
-          chmod +x scripts/fetch_mlx_weights.sh
-          TAG=$(grep '^MODELS_RELEASE_TAG=' project.conf | cut -d= -f2 | tr -d '[:space:]')
-          test -n "$TAG"
-          if gh release view "$TAG" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "Pinned $TAG not published yet; will convert"
-          fi
-
-      - name: Download pinned MLX weights
-        if: steps.pin.outputs.exists == 'true'
-        run: |
-          set -euo pipefail
-          DEMUCS_MLX_CACHE="$(pwd)/models" bash scripts/fetch_mlx_weights.sh
-          test -f models/htdemucs_6s_mlx.pkl
-
-      - name: Restore MLX model cache
-        if: steps.pin.outputs.exists != 'true'
+      # Upstream weights (~105 MB, digest-checked by demucs-mlx). Keyed on the recorded
+      # source hash, so a weights change in an upstream bump busts the cache.
+      - name: Restore upstream weights cache
         uses: actions/cache@v4
-        id: model-cache
         with:
-          path: models/htdemucs_6s_mlx.pkl
-          key: htdemucs-6s-mlx-${{ hashFiles('demucs_mlx/__init__.py', 'demucs_mlx/remote/htdemucs_6s.yaml') }}
+          path: models/mlx-cache
+          key: mlx-weights-${{ hashFiles('models/export_manifest.json') }}
 
-      - name: Convert / ensure MLX weights
-        if: steps.pin.outputs.exists != 'true' && steps.model-cache.outputs.cache-hit != 'true'
+      - name: make verify
+        run: make verify
+
+      - name: Frozen worker smoke (offline, GUI flags)
         run: |
           set -euo pipefail
-          source .venv/bin/activate
-          mkdir -p models
-          DEMUCS_MLX_CACHE="$(pwd)/models" python -c "from demucs_mlx.model_converter import get_mlx_model; get_mlx_model('htdemucs_6s'); print('ok')"
-          test -f models/htdemucs_6s_mlx.pkl
+          mkdir -p /tmp/smoke
+          uv run python - <<'PY'
+          import numpy as np
+          from worker_py.c_export import write_wav_pcm16
+          t = np.arange(44100 * 6) / 44100
+          a = (0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
+          write_wav_pcm16("/tmp/smoke/in.wav", np.stack([a, a]), 44100)
+          PY
+          DEMUCS_MLX_CACHE_DIR="$(pwd)/models/mlx-cache" \
+            dist/worker-py/demucs_mlx_worker/demucs_mlx_worker \
+            /tmp/smoke/in.wav -o /tmp/smoke/out --track-name in --progress-json \
+            --prefetch-tracks 0 --offline --mp3 | tee /tmp/smoke/events.log
+          grep -q '"event": "done"' /tmp/smoke/events.log
+          test -f /tmp/smoke/out/in/vocals.mp3
 
-      - name: Freeze worker
+      - name: Package workers
+        if: always()
         run: |
-          set -euo pipefail
-          source .venv/bin/activate
-          chmod +x scripts/freeze_worker.sh
-          DEMUCS_MLX_PYTHON="$(pwd)/.venv/bin/python" bash scripts/freeze_worker.sh
-          test -x dist/worker/demucs_mlx_worker/demucs_mlx_worker
+          mkdir -p ci-artifacts
+          [ -d dist/worker-py/demucs_mlx_worker ] && \
+            ditto -c -k --keepParent dist/worker-py/demucs_mlx_worker ci-artifacts/demucs-mlx-worker-py-mac-arm64.zip || true
+          [ -x worker-c/build/demucs_mlx_worker ] && cp worker-c/build/demucs_mlx_worker ci-artifacts/demucs_mlx_worker_c || true
+          cp models/export_manifest.json ci-artifacts/ || true
 
-      - name: Upload worker artifact
+      - name: Upload artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: demucs-mlx-worker-mac-arm64
-          path: |
-            dist/worker/demucs_mlx_worker
-            models/htdemucs_6s_mlx.pkl
-          if-no-files-found: error
+          name: demucs-mac-silicon-ci
+          path: ci-artifacts/*
+          if-no-files-found: warn
+          retention-days: 30
