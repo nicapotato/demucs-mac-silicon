@@ -28,6 +28,8 @@ permissions:
 env:
   PYTHON_VERSION: "3.12"
   GH_TOKEN: ${{ github.token }}
+  HOMEBREW_NO_AUTO_UPDATE: "1"
+  HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
 
 jobs:
   static:
@@ -65,6 +67,10 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --extra dev --extra freeze
+
+      # worker-c links libmp3lame statically; macos-latest images do not ship it.
+      - name: Install native deps (lame, mpg123)
+        run: make native-deps
 
       # Upstream weights (~105 MB, digest-checked by demucs-mlx). Keyed on the recorded
       # source hash, so a weights change in an upstream bump busts the cache.

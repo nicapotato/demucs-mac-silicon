@@ -20,12 +20,18 @@ JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 MLX_CACHE := $(CURDIR)/models/mlx-cache
 export DEMUCS_MLX_CACHE_DIR := $(MLX_CACHE)
 
-.PHONY: lint test test-fast sync verify upgrade-check models-fetch models-export models-check models-check-upgrade \
+.PHONY: lint test test-fast sync native-deps verify upgrade-check models-fetch models-export models-check models-check-upgrade \
 	goldens bench worker worker-py worker-pyinstaller worker-py-verify-build worker-c \
 	worker-c-test clean ci ci-watch release release-watch
 
 sync:
 	uv sync --extra dev --extra freeze
+
+# worker-c --mp3 needs a static libmp3lame (Homebrew lame >= 4 also needs mpg123).
+native-deps:
+	@command -v brew >/dev/null || (echo "ERROR: Homebrew required for worker-c (libmp3lame)" >&2; exit 1)
+	brew list lame >/dev/null 2>&1 || brew install lame
+	brew list mpg123 >/dev/null 2>&1 || brew install mpg123
 
 lint:
 	uv run ruff check worker_py tests scripts
@@ -97,7 +103,8 @@ worker-py-verify-build:
 	DEMUCS_MLX_PYTHON="$(PYTHON)" DEMUCS_MLX_WORKER_DIST="$(CURDIR)/dist/worker-py" bash scripts/freeze_worker.sh
 
 # The gate. Order: cheap static checks first, drift check before anything expensive.
-verify: lint models-check models-export worker-c worker-py-verify-build
+# goldens are regenerated (not committed) so worker-c test_compare actually runs on CI.
+verify: lint models-check models-export goldens worker-c worker-py-verify-build
 	$(MAKE) worker-c-test
 	uv run pytest tests -q -rs
 	@echo "verify OK: upstream $$(uv run python -c 'import demucs_mlx;print(demucs_mlx.__version__)')"

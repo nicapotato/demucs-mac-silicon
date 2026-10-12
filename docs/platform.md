@@ -8,6 +8,7 @@ lives in [demucs-windows](https://github.com/nicapotato/demucs-windows).
 
 - Apple Silicon is supported via MLX (worker-py) and mlx-c (worker-c).
 - Audio I/O is handled natively by mlx-audio-io (no FFmpeg required).
+- worker-c `--mp3` needs Homebrew `lame` (and `mpg123` for lame >= 4): `make native-deps`.
 
 Typical flow:
 

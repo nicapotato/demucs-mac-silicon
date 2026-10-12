@@ -17,11 +17,13 @@ for how upstream changes are tracked and how to be sure they work.
 
 - macOS on Apple Silicon, Python >= 3.10, [uv](https://docs.astral.sh/uv/)
 - CMake + Xcode command line tools (worker-c only)
+- Homebrew `lame` + `mpg123` for worker-c MP3 (`make native-deps`)
 
 ## Quick start
 
 ```bash
 make sync                 # uv sync --extra dev --extra freeze
+make native-deps          # brew install lame mpg123 (worker-c --mp3)
 make models-fetch         # upstream weights -> models/mlx-cache (digest-checked)
 uv run demucs-mlx-worker song.wav -o out -n htdemucs_6s
 ```

@@ -6,6 +6,7 @@ uv-first. `uv.lock` pins everything; `demucs-mlx` is pinned with `==` in `pyproj
 
 ```bash
 make sync            # uv sync --extra dev --extra freeze
+make native-deps     # brew install lame mpg123 (worker-c --mp3)
 make models-fetch    # weights -> models/mlx-cache
 ```
 
